@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0f172a"/>
+  <g fill="none" stroke="#38bdf8" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="256" cy="256" r="160"/>
+    <path d="M 256 96 L 256 416 M 96 256 L 416 256" opacity="0.3"/>
+  </g>
+  <g font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-weight="700" text-anchor="middle" fill="#e2e8f0">
+    <text x="256" y="200" font-size="60">O₂</text>
+    <text x="256" y="290" font-size="60">He</text>
+    <text x="256" y="380" font-size="48" fill="#38bdf8">N₂</text>
+  </g>
+</svg>

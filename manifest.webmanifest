@@ -1,0 +1,19 @@
+{
+  "name": "Trimix Analyzer",
+  "short_name": "Trimix",
+  "description": "Bluetooth client for the ESP32-C6 Trimix gas analyzer.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ]
+}
