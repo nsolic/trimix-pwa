@@ -3,7 +3,7 @@
  * without network. Bumping CACHE_VERSION forces a refresh of cached files
  * after a deploy.
  */
-const CACHE_VERSION = 'trimix-pwa-v1';
+const CACHE_VERSION = 'trimix-pwa-v2';
 const SHELL = [
   './',
   './index.html',
@@ -12,6 +12,8 @@ const SHELL = [
   './transport-ble.js',
   './manifest.webmanifest',
   './icon.svg',
+  './icon-192.png',
+  './icon-512.png',
 ];
 
 self.addEventListener('install', (e) => {
