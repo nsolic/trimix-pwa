@@ -88,6 +88,28 @@ const TRIMIX_BLE = (() => {
   }
 
   /**
+   * Return a previously-granted Trimix device for this origin without
+   * prompting, or null if no permission exists / the API is unavailable.
+   *
+   * Chrome's `navigator.bluetooth.getDevices()` (≥ Chrome 85, default-on
+   * since ~v95) is the silent-auto-reconnect hook. The device may be out
+   * of range; the caller still has to attempt `gatt.connect()` and handle
+   * failure gracefully.
+   */
+  async function getKnownDevice() {
+    if (!navigator.bluetooth || !navigator.bluetooth.getDevices) return null;
+    try {
+      const devices = await navigator.bluetooth.getDevices();
+      return devices.find(d => d.name === 'Trimix-Analyzer')
+          || devices[0]
+          || null;
+    } catch (e) {
+      console.warn('[ble] getDevices failed:', e);
+      return null;
+    }
+  }
+
+  /**
    * Connect to a Trimix device. Pass an existing device to skip the chooser
    * (used by auto-reconnect — `device.gatt.connect()` does not require a
    * fresh user gesture once we already have a device reference).
@@ -185,6 +207,7 @@ const TRIMIX_BLE = (() => {
   return {
     UUIDs: { SVC, LIVE, AUTH, CMD, CMD_RESULT },
     connect,
+    getKnownDevice,
     authenticate,
     subscribeLive,
     subscribeResult,

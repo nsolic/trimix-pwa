@@ -345,6 +345,29 @@
   /* Wiring                                                                 */
   /*-----------------------------------------------------------------------*/
 
+  /*-----------------------------------------------------------------------*/
+  /* Auto-connect on page load (silent, no chooser)                         */
+  /*-----------------------------------------------------------------------*/
+  /* If this origin already has permission to a Trimix device, reconnect
+   * silently without showing the picker. Falls back to the manual button
+   * if no permission exists, the device is out of range, or the API
+   * isn't available. */
+  async function tryAutoConnect() {
+    if (!navigator.bluetooth) return;
+    const device = await TRIMIX_BLE.getKnownDevice();
+    if (!device) return;
+    setStatus('auto-connecting…', 'connecting');
+    els.connectBtn.disabled = true;
+    try {
+      await setupConnection(device);
+      els.authCard.hidden = false;  // user still types password each visit
+    } catch (e) {
+      console.warn('[ble] auto-connect failed:', e.message);
+      setStatus('disconnected', 'disconnected');
+      els.connectBtn.disabled = false;
+    }
+  }
+
   els.connectBtn.addEventListener('click', onConnect);
   els.disconnectBtn.addEventListener('click', onUserDisconnect);
   els.authBtn.addEventListener('click', onAuth);
@@ -359,4 +382,7 @@
   modal.addEventListener('click', (e) => {
     if (e.target === modal) modal.hidden = true;
   });
+
+  /* Kick off silent auto-connect once the rest of the page is ready. */
+  tryAutoConnect();
 })();

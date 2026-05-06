@@ -3,7 +3,7 @@
  * without network. Bumping CACHE_VERSION forces a refresh of cached files
  * after a deploy.
  */
-const CACHE_VERSION = 'trimix-pwa-v3';
+const CACHE_VERSION = 'trimix-pwa-v4';
 const SHELL = [
   './',
   './index.html',
