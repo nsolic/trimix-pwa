@@ -87,12 +87,16 @@ const TRIMIX_BLE = (() => {
     );
   }
 
-  /** Connect to a Trimix device. The browser shows a chooser. */
-  async function connect() {
+  /**
+   * Connect to a Trimix device. Pass an existing device to skip the chooser
+   * (used by auto-reconnect — `device.gatt.connect()` does not require a
+   * fresh user gesture once we already have a device reference).
+   */
+  async function connect(existingDevice = null) {
     if (!navigator.bluetooth) {
       throw new Error('Web Bluetooth not supported');
     }
-    const device = await navigator.bluetooth.requestDevice({
+    const device = existingDevice || await navigator.bluetooth.requestDevice({
       filters: [{ name: 'Trimix-Analyzer' }],
       optionalServices: [SVC],
     });

@@ -4,21 +4,24 @@
   const $ = (id) => document.getElementById(id);
 
   const els = {
-    connectBtn: $('connect-btn'),
-    bleWarning: $('ble-warning'),
-    status:     $('status'),
-    authCard:   $('auth-card'),
-    liveCard:   $('live-card'),
-    calCard:    $('cal-card'),
-    password:   $('password'),
-    authBtn:    $('auth-btn'),
-    authMsg:    $('auth-msg'),
-    calBtn:     $('cal-btn'),
-    calSensor:  $('cal-sensor'),
-    calRef:     $('cal-ref'),
-    calMsg:     $('cal-msg'),
+    connectBtn:    $('connect-btn'),
+    bleWarning:    $('ble-warning'),
+    status:        $('status'),
+    authBadge:     $('auth-badge'),
+    disconnectBtn: $('disconnect-btn'),
+    connectCard:   $('connect-card'),
+    authCard:      $('auth-card'),
+    liveCard:      $('live-card'),
+    calCard:       $('cal-card'),
+    password:      $('password'),
+    authBtn:       $('auth-btn'),
+    authMsg:       $('auth-msg'),
+    calBtn:        $('cal-btn'),
+    calSensor:     $('cal-sensor'),
+    calRef:        $('cal-ref'),
+    calMsg:        $('cal-msg'),
     o2s1: $('o2-s1'), o2s2: $('o2-s2'),
-    he:   $('he'),    n2:   $('n2'),
+    he:   $('he'),
     temp: $('temp'),  hum:  $('hum'),
     press: $('press'), co2: $('co2'), co: $('co'),
   };
@@ -26,16 +29,29 @@
   let conn = null;
   let unsubLive = null;
   let unsubResult = null;
-  let pendingResult = null;   // { opcode, resolve, reject }
+  let pendingResult = null;        // { opcode, resolve, reject, timer }
+  let savedDevice = null;          // kept for auto-reconnect
+  let savedPassword = null;        // in-memory only — re-auth on reconnect
+  let userInitiatedDisconnect = false;
+  let reconnectTimer = null;
+  let reconnectAttempt = 0;
 
   if (!navigator.bluetooth) {
     els.bleWarning.hidden = false;
     els.connectBtn.disabled = true;
   }
 
+  /*-----------------------------------------------------------------------*/
+  /* UI helpers                                                            */
+  /*-----------------------------------------------------------------------*/
+
   function setStatus(text, cls) {
     els.status.textContent = text;
-    els.status.className = 'status ' + cls;
+    els.status.className = 'badge status ' + cls;
+  }
+
+  function setAuthBadge(visible) {
+    els.authBadge.hidden = !visible;
   }
 
   function showCell(cell, value, decimals = 1, dim = false, uncal = false) {
@@ -51,10 +67,8 @@
   }
 
   function renderSnapshot(snap) {
-    // For each O2/He cell, show "—" if not enabled or not connected; tint
-    // amber if enabled+connected but not calibrated (mirrors /api/live UX).
     const renderSensor = (cellEl, s, decimals = 1) => {
-      const dim = !s.enabled || !s.connected;
+      const dim   = !s.enabled || !s.connected;
       const uncal = s.enabled && s.connected && !s.calibrated;
       showCell(cellEl, dim ? null : s.pct, decimals, dim, uncal);
     };
@@ -62,7 +76,6 @@
     renderSensor(els.o2s1, snap.o2s1);
     renderSensor(els.o2s2, snap.o2s2);
     renderSensor(els.he,   snap.he);
-    showCell(els.n2, snap.n2Pct, 1);
 
     showCell(els.temp,  snap.env.tempC,    1);
     showCell(els.hum,   snap.env.humidity, 0);
@@ -71,19 +84,56 @@
     showCell(els.co,    snap.env.coPpm,    1);
   }
 
+  /*-----------------------------------------------------------------------*/
+  /* Result NOTIFY handling                                                 */
+  /*-----------------------------------------------------------------------*/
+
+  function onResult(r) {
+    console.log('[ble] result', r);
+    if (!pendingResult || pendingResult.opcode !== r.opcode) return;
+    const { resolve, timer } = pendingResult;
+    if (timer) clearTimeout(timer);
+    pendingResult = null;
+    resolve(r);
+  }
+
+  function awaitResult(opcode, timeoutMs = 6000) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (pendingResult && pendingResult.opcode === opcode) {
+          pendingResult = null;
+          reject(new Error(
+            'no result NOTIFY received within ' + timeoutMs + ' ms — ' +
+            'check device serial log or that result subscription is active'));
+        }
+      }, timeoutMs);
+      pendingResult = { opcode, resolve, reject, timer };
+    });
+  }
+
+  /*-----------------------------------------------------------------------*/
+  /* Connect / Reconnect / Disconnect                                       */
+  /*-----------------------------------------------------------------------*/
+
+  async function setupConnection(device) {
+    conn = await TRIMIX_BLE.connect(device);
+    savedDevice = conn.device;
+    conn.device.addEventListener('gattserverdisconnected', onDisconnected);
+
+    unsubLive   = await TRIMIX_BLE.subscribeLive(conn, renderSnapshot);
+    unsubResult = await TRIMIX_BLE.subscribeResult(conn, onResult);
+    setStatus('connected', 'connected');
+    els.disconnectBtn.hidden = false;
+    els.liveCard.hidden = false;
+  }
+
   async function onConnect() {
     setStatus('connecting', 'connecting');
     els.connectBtn.disabled = true;
+    userInitiatedDisconnect = false;
     try {
-      conn = await TRIMIX_BLE.connect();
-      conn.device.addEventListener('gattserverdisconnected', onDisconnected);
-      setStatus('connected', 'connected');
+      await setupConnection(null);  // null → user-prompted picker
       els.authCard.hidden = false;
-      // Subscribe to live + result immediately — auth gates only writes,
-      // not reads/notifies, so we can show live data pre-auth.
-      unsubLive = await TRIMIX_BLE.subscribeLive(conn, renderSnapshot);
-      els.liveCard.hidden = false;
-      unsubResult = await TRIMIX_BLE.subscribeResult(conn, onResult);
     } catch (e) {
       console.error(e);
       setStatus('disconnected', 'disconnected');
@@ -92,38 +142,84 @@
   }
 
   function onDisconnected() {
+    console.log('[ble] disconnected');
     setStatus('disconnected', 'disconnected');
-    els.connectBtn.disabled = false;
-    els.authCard.hidden = true;
-    els.liveCard.hidden = true;
-    els.calCard.hidden = true;
+    setAuthBadge(false);
+    if (conn) conn.authenticated = false;
+
     if (unsubLive)   { try { unsubLive();   } catch {} unsubLive = null; }
     if (unsubResult) { try { unsubResult(); } catch {} unsubResult = null; }
-    conn = null;
     if (pendingResult) {
       pendingResult.reject(new Error('disconnected'));
       pendingResult = null;
     }
+
+    if (userInitiatedDisconnect || !savedDevice) {
+      // Manual disconnect — full UI reset, don't auto-reconnect.
+      els.connectBtn.disabled = false;
+      els.connectCard.hidden = false;
+      els.authCard.hidden = true;
+      els.liveCard.hidden = true;
+      els.calCard.hidden  = true;
+      els.disconnectBtn.hidden = true;
+      conn = null;
+      savedDevice = null;
+      savedPassword = null;
+      reconnectAttempt = 0;
+      return;
+    }
+
+    // Auto-reconnect path: keep the auth/live/cal cards as-is and just retry.
+    scheduleReconnect();
   }
 
-  function onResult(r) {
-    if (!pendingResult || pendingResult.opcode !== r.opcode) return;
-    const { resolve } = pendingResult;
-    pendingResult = null;
-    resolve(r);
+  function scheduleReconnect() {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    const delay = Math.min(1500 * Math.pow(1.4, reconnectAttempt), 12000);
+    reconnectAttempt++;
+    setStatus(`reconnecting (${reconnectAttempt})`, 'connecting');
+    console.log('[ble] reconnect attempt', reconnectAttempt, 'in', delay, 'ms');
+    reconnectTimer = setTimeout(tryReconnect, delay);
   }
 
-  function awaitResult(opcode, timeoutMs = 4000) {
-    return new Promise((resolve, reject) => {
-      pendingResult = { opcode, resolve, reject };
-      setTimeout(() => {
-        if (pendingResult && pendingResult.opcode === opcode) {
-          pendingResult = null;
-          reject(new Error('result timeout'));
+  async function tryReconnect() {
+    if (!savedDevice || userInitiatedDisconnect) return;
+    try {
+      await setupConnection(savedDevice);
+      reconnectAttempt = 0;
+      // If we had auth before, transparently re-auth using the cached password.
+      if (savedPassword) {
+        const ok = await TRIMIX_BLE.authenticate(conn, savedPassword);
+        if (ok) {
+          conn.authenticated = true;
+          setAuthBadge(true);
+          els.authCard.hidden = true;
+          els.calCard.hidden = false;
+        } else {
+          // Password may have changed — surface the auth card again.
+          savedPassword = null;
+          els.authCard.hidden = false;
         }
-      }, timeoutMs);
-    });
+      }
+    } catch (e) {
+      console.warn('[ble] reconnect failed:', e.message);
+      scheduleReconnect();
+    }
   }
+
+  function onUserDisconnect() {
+    userInitiatedDisconnect = true;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (conn && conn.server && conn.server.connected) {
+      try { conn.server.disconnect(); } catch {}
+    } else {
+      onDisconnected();   // fire cleanup if already gone
+    }
+  }
+
+  /*-----------------------------------------------------------------------*/
+  /* Auth                                                                   */
+  /*-----------------------------------------------------------------------*/
 
   async function onAuth() {
     if (!conn) return;
@@ -137,10 +233,13 @@
         els.authMsg.textContent = 'wrong password';
         return;
       }
-      els.authMsg.className = 'hint success';
-      els.authMsg.textContent = 'authenticated';
-      els.calCard.hidden = false;
+      // Success — collapse the auth card, badge in header, cache for reconnect.
+      savedPassword = els.password.value;
       els.password.value = '';
+      els.authMsg.textContent = '';
+      els.authCard.hidden = true;
+      els.calCard.hidden  = false;
+      setAuthBadge(true);
     } catch (e) {
       console.error(e);
       els.authMsg.className = 'hint error';
@@ -150,8 +249,34 @@
     }
   }
 
+  /*-----------------------------------------------------------------------*/
+  /* Calibration                                                            */
+  /*-----------------------------------------------------------------------*/
+
+  function statusName(code) {
+    switch (code) {
+      case 0x00: return 'OK';
+      case 0x01: return 'malformed payload';
+      case 0x02: return 'not authenticated';
+      case 0x03: return 'sensor not found';
+      case 0x04: return 'sensor not connected or no valid reading';
+      case 0x05: return 'value out of range';
+      case 0xFF: return 'firmware reported failure';
+      default:   return 'unknown status 0x' + code.toString(16);
+    }
+  }
+
   async function onCalibrate() {
-    if (!conn || !conn.authenticated) return;
+    if (!conn) {
+      els.calMsg.className = 'hint error';
+      els.calMsg.textContent = 'not connected';
+      return;
+    }
+    if (!conn.authenticated) {
+      els.calMsg.className = 'hint error';
+      els.calMsg.textContent = 'authenticate first (above)';
+      return;
+    }
     const sensorIdx = parseInt(els.calSensor.value, 10);
     const refPct    = parseFloat(els.calRef.value);
     if (Number.isNaN(refPct) || refPct <= 0 || refPct > 100) {
@@ -163,14 +288,15 @@
     els.calMsg.className = 'hint';
     els.calMsg.textContent = 'calibrating…';
     try {
+      console.log('[ble] calibrate sensor=' + sensorIdx + ' ref=' + refPct);
       const resultPromise = awaitResult(0x01);
       await TRIMIX_BLE.calibrateO2OnePoint(conn, sensorIdx, refPct);
+      console.log('[ble] write done — waiting for result');
       const r = await resultPromise;
       if (r.status === 0x00) {
-        // Payload: [i16 mv_x10][f32 slope]
         const dv = new DataView(r.payload.buffer, r.payload.byteOffset,
                                 r.payload.byteLength);
-        const mv = dv.getInt16(0, true) / 10;
+        const mv    = dv.getInt16(0, true) / 10;
         const slope = dv.getFloat32(2, true);
         els.calMsg.className = 'hint success';
         els.calMsg.textContent =
@@ -178,9 +304,11 @@
       } else {
         els.calMsg.className = 'hint error';
         els.calMsg.textContent =
-          `failed: status=0x${r.status.toString(16)} code=${r.code}`;
+          'failed: ' + statusName(r.status) +
+          (r.code ? ' (code=' + r.code + ')' : '');
       }
     } catch (e) {
+      console.error('[ble] calibrate error:', e);
       els.calMsg.className = 'hint error';
       els.calMsg.textContent = e.message || 'calibration failed';
     } finally {
@@ -188,17 +316,10 @@
     }
   }
 
-  els.connectBtn.addEventListener('click', onConnect);
-  els.authBtn.addEventListener('click', onAuth);
-  els.calBtn.addEventListener('click', onCalibrate);
-  els.password.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') onAuth();
-  });
+  /*-----------------------------------------------------------------------*/
+  /* Switch-to-WiFi modal                                                   */
+  /*-----------------------------------------------------------------------*/
 
-  /* Switch-to-WiFi modal: each "Logs & History" button opens this with
-   * a deep link to the page on the device's WiFi UI. The link itself is
-   * what the user taps after switching networks — clicking before
-   * switching just leads to a "site can't be reached", which is fine. */
   const wifiPages = {
     advanced: { title: 'Calibration history', path: '/advanced' },
     bottles:  { title: 'Bottles',             path: '/bottles' },
@@ -220,6 +341,17 @@
     modal.hidden = false;
   }
 
+  /*-----------------------------------------------------------------------*/
+  /* Wiring                                                                 */
+  /*-----------------------------------------------------------------------*/
+
+  els.connectBtn.addEventListener('click', onConnect);
+  els.disconnectBtn.addEventListener('click', onUserDisconnect);
+  els.authBtn.addEventListener('click', onAuth);
+  els.calBtn.addEventListener('click', onCalibrate);
+  els.password.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') onAuth();
+  });
   document.querySelectorAll('[data-wifi-page]').forEach((btn) => {
     btn.addEventListener('click', () => openWifiModal(btn.dataset.wifiPage));
   });

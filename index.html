@@ -6,13 +6,18 @@
 <meta name="theme-color" content="#0f172a" />
 <title>Trimix Analyzer</title>
 <link rel="manifest" href="manifest.webmanifest" />
-<link rel="icon" type="image/svg+xml" href="icon.svg" />
+<link rel="icon" type="image/png" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 <header>
   <h1>Trimix Analyzer</h1>
-  <span id="status" class="status disconnected">disconnected</span>
+  <div class="header-status">
+    <span id="auth-badge" class="badge auth" hidden>🔓 admin</span>
+    <span id="status" class="badge status disconnected">disconnected</span>
+    <button id="disconnect-btn" class="icon-btn" hidden title="Disconnect">✕</button>
+  </div>
 </header>
 
 <main>
@@ -28,7 +33,7 @@
 
   <section class="card" id="auth-card" hidden>
     <h2>Authenticate</h2>
-    <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
+    <input id="password" type="password" placeholder="Password (default: trimix123)" autocomplete="current-password" />
     <button id="auth-btn" class="primary">Unlock</button>
     <p class="hint" id="auth-msg"></p>
   </section>
@@ -39,7 +44,6 @@
       <div class="cell"><span class="label">O₂ S1</span><span id="o2-s1" class="value">—</span><span class="unit">%</span></div>
       <div class="cell"><span class="label">O₂ S2</span><span id="o2-s2" class="value">—</span><span class="unit">%</span></div>
       <div class="cell"><span class="label">He</span><span id="he" class="value">—</span><span class="unit">%</span></div>
-      <div class="cell"><span class="label">N₂</span><span id="n2" class="value">—</span><span class="unit">%</span></div>
       <div class="cell small"><span class="label">Temp</span><span id="temp" class="value">—</span><span class="unit">°C</span></div>
       <div class="cell small"><span class="label">Hum</span><span id="hum" class="value">—</span><span class="unit">%</span></div>
       <div class="cell small"><span class="label">Press</span><span id="press" class="value">—</span><span class="unit">hPa</span></div>
@@ -53,8 +57,8 @@
     <label>
       Sensor
       <select id="cal-sensor">
-        <option value="0">Sensor 0</option>
-        <option value="1">Sensor 1</option>
+        <option value="0">O₂ S1</option>
+        <option value="1">O₂ S2</option>
       </select>
     </label>
     <label>
@@ -87,8 +91,11 @@
     <ol class="steps">
       <li>Open your phone's WiFi settings.</li>
       <li>Connect to <code>Trimix-Analyzer</code>
-          (password <code>trimix123</code>).</li>
+          (WiFi password <code>trimix123</code>).</li>
       <li>Come back here and tap the button below.</li>
+      <li>When the page asks, log in with
+          username <code>admin</code> and password <code>trimix123</code>
+          (or your custom password if you changed it).</li>
     </ol>
     <p class="hint">
       Your phone may say the network has no internet — that's expected.
