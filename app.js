@@ -36,6 +36,11 @@
   let reconnectTimer = null;
   let reconnectAttempt = 0;
 
+  /* Stop retrying after this many attempts (≈4 minutes of backoff before
+   * the cap, plus 12 s per attempt at the cap). After that the user has
+   * to tap Connect manually — keeps battery sane if the analyzer is off. */
+  const MAX_RECONNECT_ATTEMPTS = 20;
+
   if (!navigator.bluetooth) {
     els.bleWarning.hidden = false;
     els.connectBtn.disabled = true;
@@ -154,13 +159,18 @@
       pendingResult = null;
     }
 
+    /* Hide the calibration card on every disconnect — even if we re-auth
+     * silently in a moment, leaving it visible while `conn.authenticated`
+     * is false confuses the user (Calibrate button looks live but bails
+     * with "authenticate first"). It comes back when re-auth succeeds. */
+    els.calCard.hidden = true;
+
     if (userInitiatedDisconnect || !savedDevice) {
       // Manual disconnect — full UI reset, don't auto-reconnect.
       els.connectBtn.disabled = false;
       els.connectCard.hidden = false;
       els.authCard.hidden = true;
       els.liveCard.hidden = true;
-      els.calCard.hidden  = true;
       els.disconnectBtn.hidden = true;
       conn = null;
       savedDevice = null;
@@ -169,12 +179,35 @@
       return;
     }
 
-    // Auto-reconnect path: keep the auth/live/cal cards as-is and just retry.
+    // Auto-reconnect path
     scheduleReconnect();
   }
 
+  function giveUpReconnecting(reason) {
+    console.warn('[ble] giving up:', reason);
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    setStatus('disconnected', 'disconnected');
+    /* Surface the manual Connect button again. Keep savedDevice null so
+     * the next user click goes through the standard requestDevice() chooser
+     * — safer than auto-reconnecting to a possibly-gone device. */
+    els.connectBtn.disabled = false;
+    els.connectCard.hidden = false;
+    els.authCard.hidden = true;
+    els.liveCard.hidden = true;
+    els.calCard.hidden  = true;
+    els.disconnectBtn.hidden = true;
+    conn = null;
+    savedDevice = null;
+    savedPassword = null;
+    reconnectAttempt = 0;
+  }
+
   function scheduleReconnect() {
-    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      giveUpReconnecting('max attempts reached');
+      return;
+    }
     const delay = Math.min(1500 * Math.pow(1.4, reconnectAttempt), 12000);
     reconnectAttempt++;
     setStatus(`reconnecting (${reconnectAttempt})`, 'connecting');
@@ -182,14 +215,29 @@
     reconnectTimer = setTimeout(tryReconnect, delay);
   }
 
+  /**
+   * If the user clicked Disconnect while we were awaiting a connect or
+   * auth step, drop the freshly-established link instead of leaving a
+   * zombie session that the UI thinks is gone. Returns true if we bailed.
+   */
+  function bailIfUserCancelled() {
+    if (!userInitiatedDisconnect) return false;
+    if (conn && conn.server && conn.server.connected) {
+      try { conn.server.disconnect(); } catch {}
+    }
+    return true;
+  }
+
   async function tryReconnect() {
     if (!savedDevice || userInitiatedDisconnect) return;
     try {
       await setupConnection(savedDevice);
+      if (bailIfUserCancelled()) return;
       reconnectAttempt = 0;
       // If we had auth before, transparently re-auth using the cached password.
       if (savedPassword) {
         const ok = await TRIMIX_BLE.authenticate(conn, savedPassword);
+        if (bailIfUserCancelled()) return;
         if (ok) {
           conn.authenticated = true;
           setAuthBadge(true);
@@ -200,10 +248,13 @@
           savedPassword = null;
           els.authCard.hidden = false;
         }
+      } else {
+        // No cached password — show the auth card so user can unlock.
+        els.authCard.hidden = false;
       }
     } catch (e) {
       console.warn('[ble] reconnect failed:', e.message);
-      scheduleReconnect();
+      if (!userInitiatedDisconnect) scheduleReconnect();
     }
   }
 
@@ -356,15 +407,22 @@
     if (!navigator.bluetooth) return;
     const device = await TRIMIX_BLE.getKnownDevice();
     if (!device) return;
+    /* Pre-seed savedDevice so the retry path works if this initial attempt
+     * fails (analyzer briefly off, out of range, etc.). */
+    savedDevice = device;
     setStatus('auto-connecting…', 'connecting');
     els.connectBtn.disabled = true;
+    userInitiatedDisconnect = false;
     try {
       await setupConnection(device);
+      if (bailIfUserCancelled()) return;
       els.authCard.hidden = false;  // user still types password each visit
     } catch (e) {
       console.warn('[ble] auto-connect failed:', e.message);
-      setStatus('disconnected', 'disconnected');
-      els.connectBtn.disabled = false;
+      /* Schedule a backoff retry — same machinery as gattserverdisconnected
+       * recovery, so the user just sees "reconnecting (n)" and gets picked
+       * up automatically once the analyzer comes back. */
+      if (!userInitiatedDisconnect) scheduleReconnect();
     }
   }
 
